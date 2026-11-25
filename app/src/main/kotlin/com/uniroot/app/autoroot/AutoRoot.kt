@@ -259,8 +259,14 @@ class AutoRootService : Service() {
                 toast(getString(R.string.phone_rooted_toast))
                 postResult(getString(R.string.instant_root_rooted_notif), success = true)
                 // Managers cache their "working" state: force-stop both so the
-                // next open shows the fresh, live root.
-                runCatching { instant.su("am force-stop me.weishu.kernelsu; am force-stop com.rifsxd.ksunext", timeoutSec = 20) }
+                // next open shows the fresh, live root (including spoofed APKs).
+                val pkgs = listOfNotNull(
+                    com.uniroot.app.engine.KsuManagerDetector.find(applicationContext, next = false)?.packageName,
+                    com.uniroot.app.engine.KsuManagerDetector.find(applicationContext, next = true)?.packageName,
+                ).ifEmpty { listOf("me.weishu.kernelsu", "com.rifsxd.ksunext") }
+                runCatching {
+                    instant.su(pkgs.joinToString("; ") { "am force-stop $it" }, timeoutSec = 20)
+                }
                 return
             }
             elapsed += 2
@@ -467,7 +473,8 @@ class AutoRootService : Service() {
             // (recorded at root time) — never the other one.
             val next = getSharedPreferences("uniroot_prefs", Context.MODE_PRIVATE)
                 .getString("loaded_flavor", "kernelsu") == "kernelsu_next"
-            val pkg = if (next) "com.rifsxd.ksunext" else "me.weishu.kernelsu"
+            val pkg = com.uniroot.app.engine.KsuManagerDetector.find(this, next)?.packageName
+                ?: if (next) "com.rifsxd.ksunext" else "me.weishu.kernelsu"
             packageManager.getLaunchIntentForPackage(pkg)?.let { launch ->
                 val pi = PendingIntent.getActivity(
                     this, 1, launch,

@@ -17,7 +17,9 @@ class NewMethodBootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val action = intent.action ?: return
         if (action != Intent.ACTION_LOCKED_BOOT_COMPLETED && action != Intent.ACTION_BOOT_COMPLETED) return
-        if (java.io.File("/dev/df").exists()) return
+        if (com.uniroot.app.engine.BootRootState.isRootedThisBoot(context) ||
+            java.io.File("/dev/df").exists()
+        ) return
         DfBootService.start(context)
     }
 

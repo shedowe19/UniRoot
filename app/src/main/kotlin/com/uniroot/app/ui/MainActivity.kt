@@ -47,6 +47,8 @@ class MainActivity : ComponentActivity(), Shizuku.OnRequestPermissionResultListe
     private var rootStateRow by mutableStateOf("")
     private var rootDetailRow by mutableStateOf("")
     private var selinuxRow by mutableStateOf("")
+    private var dirtyFragSupported by mutableStateOf(false)
+    private var rootabilityDetail by mutableStateOf("")
     private var autoMatched by mutableStateOf(false)
     private var advancedVisible by mutableStateOf(false)
     private var shizukuEnabled by mutableStateOf(false)
@@ -107,9 +109,13 @@ class MainActivity : ComponentActivity(), Shizuku.OnRequestPermissionResultListe
         ksudNextProfileId = KsudNextProfiles.selected(this)?.id ?: ""
         ksudClassicProfiles = KsudClassicProfiles.list(this)
         ksudClassicProfileId = KsudClassicProfiles.selected(this)?.id ?: ""
-        // New method state: pref + boot-receiver component state + DE prefs.
-        newMethod = getSharedPreferences("uniroot_prefs", MODE_PRIVATE)
-            .getBoolean("root_method_new", false)
+        val appPrefs = getSharedPreferences("uniroot_prefs", MODE_PRIVATE)
+        newMethod = if (appPrefs.contains("root_method_new")) {
+            appPrefs.getBoolean("root_method_new", false)
+        } else {
+            engine.detectDevice().matchedProfileName == null &&
+                com.uniroot.app.engine.DeviceInfoPanel.dirtyFragRootability(this).rootable
+        }
         newMethodBootEnabled = runCatching {
             packageManager.getComponentEnabledSetting(
                 android.content.ComponentName(
@@ -140,6 +146,8 @@ class MainActivity : ComponentActivity(), Shizuku.OnRequestPermissionResultListe
                     rootStateRow = rootStateRow,
                     rootDetailRow = rootDetailRow,
                     selinuxRow = selinuxRow,
+                    dirtyFragSupported = dirtyFragSupported,
+                    rootabilityDetail = rootabilityDetail,
                     kernelSupported = selectedProfileName != null,
                     rooted = rooted,
                     running = running,
@@ -450,6 +458,11 @@ class MainActivity : ComponentActivity(), Shizuku.OnRequestPermissionResultListe
 
     override fun onResume() {
         super.onResume()
+        // Keep rooted status accurate across soft reboots and manager grants.
+        lifecycleScope.launch {
+            withContext(Dispatchers.IO) { engine.refreshRootedLive() }
+            refreshDeviceInfoPanel()
+        }
         // Landing after the setup soft reboot: prompt the helper install, or
         // complete the setup if the user just installed it.
         checkInstantRootLanding()
@@ -466,13 +479,23 @@ class MainActivity : ComponentActivity(), Shizuku.OnRequestPermissionResultListe
                 runCatching { com.uniroot.app.engine.DeviceInfoPanel.rows(this@MainActivity) }
                     .getOrDefault(emptyList())
             }
+            val rootability = withContext(Dispatchers.IO) {
+                runCatching { com.uniroot.app.engine.DeviceInfoPanel.dirtyFragRootability(this@MainActivity) }
+                    .getOrDefault(com.uniroot.app.engine.DeviceInfoPanel.Rootability(false, "Unknown", ""))
+            }
             // Keep the panel focused (user feedback: "too much info"):
-            // the manager-style essentials only.
-            val keep = setOf("Device", "Android", "Kernel")
+            // the manager-style essentials + clear rootability answer.
+            val keep = setOf("Device", "Android", "Kernel", "Rootable")
             deviceInfoRows = rows.filter { it.first in keep }
-            // Grant-independent root state + flavor line
-            val (state, _, detail) = com.uniroot.app.engine.DeviceInfoPanel.rootState()
-            val flavor = com.uniroot.app.engine.DeviceInfoPanel.flavor(this@MainActivity)
+            dirtyFragSupported = rootability.rootable
+            rootabilityDetail = rootability.detail
+            // Boot-aware root state (persists across zygote/surfaceflinger soft reboots) + flavor
+            val (state, _, detail) = withContext(Dispatchers.IO) {
+                com.uniroot.app.engine.DeviceInfoPanel.rootState(this@MainActivity)
+            }
+            val flavor = withContext(Dispatchers.IO) {
+                com.uniroot.app.engine.DeviceInfoPanel.flavor(this@MainActivity)
+            }
             rootStateRow = state
             rootDetailRow = detail + " · " + flavor
             // SELinux only with a su grant (getenforce needs root)
@@ -520,21 +543,25 @@ class MainActivity : ComponentActivity(), Shizuku.OnRequestPermissionResultListe
     /**
      * After a successful run: kill the (possibly stale) KernelSU manager so it
      * re-reads the freshly loaded module, then bring it back up.
+     * Supports both standard and `-spoofed` KernelSU Next manager builds.
      */
     private fun restartKsuManager() {
         // The relaunched manager follows the selected flavor: KernelSU Next
         // profiles ship real Next builds (S25: ksud-nxt-S938X, S26: ksud-nxt-S948X).
-        val (installed, pkg) = engine.isKsuManagerInstalled(ksuNextMode)
-        if (!installed) {
+        val match = engine.findKsuManager(ksuNextMode)
+        if (match == null) {
             Toast.makeText(this, R.string.manager_not_installed, Toast.LENGTH_LONG).show()
             return
         }
+        val pkg = match.packageName
         lifecycleScope.launch {
             val stopped = engine.forceStopKsuManager(pkg)
             delay(if (stopped) 800L else 200L)
             // Shizuku `am start` always works (even with the app in background);
-            // the launch-intent path is the fallback.
-            val activity = if (pkg.startsWith("com.rifsxd")) "com.rifsxd.ksunext.ui.MainActivity" else "me.weishu.kernelsu.ui.MainActivity"
+            // use the resolved launcher activity so spoofed APKs launch properly.
+            val activity = match.launcherActivity
+                ?: packageManager.getLaunchIntentForPackage(pkg)?.component?.className
+                ?: if (pkg.startsWith("com.rifsxd")) "com.rifsxd.ksunext.ui.MainActivity" else "me.weishu.kernelsu.ui.MainActivity"
             val started = engine.startManagerViaShizuku(pkg, activity)
             if (!started) {
                 val intent = packageManager.getLaunchIntentForPackage(pkg)
@@ -611,7 +638,8 @@ class MainActivity : ComponentActivity(), Shizuku.OnRequestPermissionResultListe
                 if (rc == 0) {
                     newMethodProgress = 100
                     newMethodStage = "Phone rooted ✓"
-                    engine.markRooted("DF")
+                    engine.markRooted("DF", if (ksuNextMode) "kernelsu_next" else "kernelsu")
+                    refreshDeviceInfoPanel()
                     Toast.makeText(this@MainActivity, R.string.phone_rooted_toast, Toast.LENGTH_LONG).show()
                     if (newMethodSoftReboot) {
                         engine.appendLog("[NewMethod] auto soft reboot…")

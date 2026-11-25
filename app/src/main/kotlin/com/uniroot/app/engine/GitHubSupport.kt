@@ -53,17 +53,17 @@ class GitHubSupport(private val context: Context) {
         }
     }
 
-    /** Same matching rules as Root My Galaxy: exact model + exact three-part kernel version. */
+    /**
+     * Matches local device against feed targets:
+     * 1. Exact model or dual-SIM stripped base (`SM-A566B/DS` -> `SM-A566B`) + exact 3-part kernel.
+     * 2. North American carrier/unlocked alias (`U1` <-> `U`) when exact 3-part kernel matches.
+     */
     fun matchRmgTarget(targets: List<RmgTarget>, model: String, kernelVersion: String): RmgTarget? =
-        targets.firstOrNull { t ->
-            t.models.any { it.equals(model, ignoreCase = true) } && t.kernelVersions.contains(kernelVersion)
-        }
+        matchTargetInList(targets, model, kernelVersion)
 
     /**
-     * Downloads the exploit (cve-2026-43499-app.so) and the KernelSU daemon of a
-     * matched Root My Galaxy payload and turns them into a usable device profile
-     * (Local mode: app payload run through the root helper, ksud late-load embeds
-     * its own kernel module, so the .ko path reuses the ksud file).
+     * Downloads the artifacts of a matched feed entry and turns them into a
+     * usable device profile.
      */
     fun downloadRmgProfile(target: RmgTarget): DeviceProfile {
         val dir = File(File(context.filesDir, "rmg"), target.payloadId).apply { mkdirs() }
@@ -125,11 +125,8 @@ class GitHubSupport(private val context: Context) {
     }
 
     /** "6.6.127-android15-8-…" → "android15-6.6" (the GKI KMI used in asset names). */
-    fun kmiFromKernel(kernel: String): String {
-        val m = Regex("android(\\d+)-(\\d+)\\.(\\d+)").find(kernel)
-            ?: return ""
-        return "android${m.groupValues[1]}-${m.groupValues[2]}.${m.groupValues[3]}"
-    }
+    fun kmiFromKernel(kernel: String): String =
+        DeviceInfoPanel.kmiFromRelease(kernel, DeviceInfoPanel.shippingApiLevel()).orEmpty()
 
     /**
      * Downloads the official KernelSU manager APK from the latest GitHub
@@ -234,5 +231,26 @@ class GitHubSupport(private val context: Context) {
         private const val MAX_COMMIT_RESPONSE_BYTES = 16 * 1024
         private const val MAX_MANIFEST_BYTES = 256 * 1024
         private const val MAX_RELEASE_BYTES = 512 * 1024
+
+        internal fun matchTargetInList(
+            targets: List<RmgTarget>,
+            model: String,
+            kernelVersion: String,
+        ): RmgTarget? {
+            val norm = DeviceInfoPanel.normalizeSamsungModel(model)
+            targets.firstOrNull { t ->
+                t.kernelVersions.contains(kernelVersion) &&
+                    t.models.any { DeviceInfoPanel.normalizeSamsungModel(it).equals(norm, ignoreCase = true) }
+            }?.let { return it }
+            val alt = when {
+                norm.endsWith("U1") -> norm.removeSuffix("1")
+                norm.endsWith("U") -> "${norm}1"
+                else -> null
+            } ?: return null
+            return targets.firstOrNull { t ->
+                t.kernelVersions.contains(kernelVersion) &&
+                    t.models.any { DeviceInfoPanel.normalizeSamsungModel(it).equals(alt, ignoreCase = true) }
+            }
+        }
     }
 }

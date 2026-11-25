@@ -166,6 +166,8 @@ data class UniUiState(
     val rootStateRow: String = "",
     val rootDetailRow: String = "",
     val selinuxRow: String = "",
+    val dirtyFragSupported: Boolean = false,
+    val rootabilityDetail: String = "",
 )
 
 interface UniActions {
@@ -904,14 +906,28 @@ private fun ControlPanel(
     onAddProfile: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val rootedEffective = state.rooted || state.rootStateRow.startsWith("Rooted")
+    val bannerSupported = if (state.newMethod) {
+        state.dirtyFragSupported
+    } else {
+        state.kernelSupported || state.dirtyFragSupported
+    }
+    val bannerRootability = when {
+        !state.newMethod && state.kernelSupported ->
+            "Rootable — profile: ${state.selectedProfileName}"
+        !state.newMethod && state.dirtyFragSupported ->
+            "${state.rootabilityDetail} — switch to New exploit"
+        else -> state.rootabilityDetail
+    }
     Column(modifier = modifier) {
         ActivationStatusCard(
-            rooted = state.rooted,
-            supported = state.kernelSupported,
+            rooted = rootedEffective,
+            supported = bannerSupported,
             modifier = Modifier.fillMaxWidth(),
             liveRootState = state.rootStateRow,
             liveRootDetail = state.rootDetailRow,
             selinux = state.selinuxRow,
+            rootabilityDetail = bannerRootability,
         )
         DeviceInfoCard(
             deviceName = state.deviceName,
@@ -954,7 +970,7 @@ private fun ControlPanel(
             // Root action sits directly under the profiles: "Root now", or
             // "Disable root" while the phone is rooted (cuts the boot re-root).
             RunButton(
-                rooted = state.rooted,
+                rooted = rootedEffective,
                 running = state.running,
                 supported = state.kernelSupported,
                 onRun = actions::onRun,
@@ -991,10 +1007,9 @@ private fun ControlPanel(
             // Root action sits right under the updater: "Root now", or
             // "Disable root" while the phone is rooted (cuts the boot re-root).
             RunButton(
-                rooted = state.rooted,
+                rooted = rootedEffective,
                 running = state.running,
-                // New method needs no profile: the button is never greyed there.
-                supported = true,
+                supported = state.dirtyFragSupported || state.rootabilityDetail.isEmpty(),
                 onRun = actions::onRun,
                 modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
             )
@@ -1258,6 +1273,7 @@ private fun ActivationStatusCard(
     liveRootState: String = "",
     liveRootDetail: String = "",
     selinux: String = "",
+    rootabilityDetail: String = "",
 ) {
     // GhostSam-style: the banner IS the root status. Three live states from
     // grant-independent signals (module, DF markers), plus SELinux line.
@@ -1270,8 +1286,8 @@ private fun ActivationStatusCard(
         supported -> if (isSystemInDarkTheme()) Color(0xFF173923) else Color(0xFFDFFAE4)
         else -> if (isSystemInDarkTheme()) Color(0xFF3B1715) else Color(0xFFF8E2E2)
     }
-    val statusIcon = if (positive) Icons.Rounded.CheckCircleOutline else Icons.Rounded.RemoveCircleOutline
-    val statusIconColor = if (positive) {
+    val statusIcon = if (positive || supported) Icons.Rounded.CheckCircleOutline else Icons.Rounded.RemoveCircleOutline
+    val statusIconColor = if (positive || supported) {
         if (isSystemInDarkTheme()) Color(0xFF62D783) else Color(0xFF36D167)
     } else {
         if (isSystemInDarkTheme()) Color(0xFFFFC56C) else Color(0xFFF5A623)
@@ -1283,18 +1299,37 @@ private fun ActivationStatusCard(
         supported -> stringResource(R.string.kernel_supported)
         else -> stringResource(R.string.kernel_unsupported)
     }
+    val subtitle = when {
+        positive -> listOfNotNull(liveRootDetail, selinux.takeIf { it.isNotBlank() }?.let { "SELinux: $it" })
+            .filter { it.isNotBlank() }
+            .joinToString(" · ")
+        failedLive -> liveRootDetail
+        else -> rootabilityDetail
+    }
     Card(
         modifier = modifier,
         colors = CardDefaults.defaultColors(color = cardColor),
     ) {
         Box(modifier = Modifier.fillMaxWidth().height(110.dp)) {
-            Column(modifier = Modifier.align(Alignment.TopStart).padding(start = 16.dp, top = 12.dp)) {
+            Column(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(start = 16.dp, end = 92.dp, top = 12.dp, bottom = 12.dp),
+            ) {
                 Text(
                     text = title,
                     fontSize = 22.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = MiuixTheme.colorScheme.onSurface,
                 )
+                if (subtitle.isNotBlank()) {
+                    Text(
+                        text = subtitle,
+                        modifier = Modifier.padding(top = 6.dp),
+                        fontSize = 13.sp,
+                        color = MiuixTheme.colorScheme.onSurface.copy(alpha = 0.78f),
+                    )
+                }
             }
             Icon(
                 imageVector = statusIcon,

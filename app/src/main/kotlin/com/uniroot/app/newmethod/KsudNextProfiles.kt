@@ -19,17 +19,40 @@ import java.io.File
  * uniroot_prefs/ksud_next_profile.
  */
 data class KsudNextProfile(
-    val id: String,        // nom du fichier, ex. "3.4.0-kdp-samsung"
-    val version: String,   // 1er token avant '-', ex. "3.4.0"
-    val variant: String,   // le reste, ex. "kdp-samsung" ("" si absent)
+    val id: String,        // nom du fichier, ex. "kdp-samsung-v3.4.2" ou "3.4.0-kdp-samsung"
+    val version: String,   // version numérique pour le tri, ex. "3.4.2"
+    val variant: String,   // variante, ex. "kdp-samsung" ("" si absent)
     val note: String,      // description (sidecar <id>.txt ou note dynamique)
     val dynamic: Boolean = false, // true = fichier téléchargé (filesDir)
-) {
-    /** "3.4.0 · kdp-samsung" — la version complète est toujours visible. */
-    val label: String get() = if (variant.isEmpty()) version else "$version · $variant"
-}
+    val label: String = if (variant.isEmpty()) version else "$version · $variant",
+)
 
 object KsudNextProfiles {
+
+    internal data class ParsedProfileId(
+        val version: String,
+        val variant: String,
+        val label: String,
+    )
+
+    /**
+     * Parses both naming conventions:
+     * - "kdp-samsung-v3.4.2" -> version="3.4.2", variant="kdp-samsung", label="kdp-samsung-v3.4.2"
+     * - "3.4.0-kdp-samsung"  -> version="3.4.0", variant="kdp-samsung", label="3.4.0 · kdp-samsung"
+     */
+    internal fun parseProfileId(name: String): ParsedProfileId {
+        val prefixed = Regex("^(.+)-v(\\d+(?:\\.\\d+)*)$").matchEntire(name)
+        if (prefixed != null) {
+            val variant = prefixed.groupValues[1]
+            val version = prefixed.groupValues[2]
+            return ParsedProfileId(version = version, variant = variant, label = name)
+        }
+        val dash = name.indexOf('-')
+        val version = if (dash > 0) name.substring(0, dash) else name
+        val variant = if (dash > 0) name.substring(dash + 1) else ""
+        val label = if (variant.isEmpty()) version else "$version · $variant"
+        return ParsedProfileId(version = version, variant = variant, label = label)
+    }
 
     private const val DIR = "df/ksud-next"
     private const val PREFS = "uniroot_prefs"
@@ -68,9 +91,7 @@ object KsudNextProfiles {
     }
 
     private fun profileFromId(context: Context, name: String, dynamic: Boolean): KsudNextProfile {
-        val dash = name.indexOf('-')
-        val version = if (dash > 0) name.substring(0, dash) else name
-        val variant = if (dash > 0) name.substring(dash + 1) else ""
+        val parsed = parseProfileId(name)
         val note = if (dynamic) {
             runCatching { sidecar(context, name).readText().lineSequence().firstOrNull()?.trim() ?: "" }
                 .getOrDefault("")
@@ -81,8 +102,14 @@ object KsudNextProfiles {
                 }
             }.getOrDefault("")
         }
-        return KsudNextProfile(id = name, version = version, variant = variant,
-            note = note, dynamic = dynamic)
+        return KsudNextProfile(
+            id = name,
+            version = parsed.version,
+            variant = parsed.variant,
+            note = note,
+            dynamic = dynamic,
+            label = parsed.label,
+        )
     }
 
     private fun sidecar(context: Context, id: String): File =

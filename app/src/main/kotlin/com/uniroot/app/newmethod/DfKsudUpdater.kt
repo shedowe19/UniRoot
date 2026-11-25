@@ -78,7 +78,7 @@ object DfKsudUpdater {
                 if (comp.size <= maxSize) return comp
             }
         }
-        return best
+        return best?.takeIf { it.size <= maxSize }
     }
 
     private fun containsBytes(data: ByteArray, needle: ByteArray): Boolean {
@@ -313,8 +313,10 @@ object DfKsudUpdater {
             progress(100, "Done: $tag patched -> classic profile '$niceName'")
             "OK: $tag patched -> classic profile '$niceName'"
         } else {
-            val profileId = niceName
+            val profileId = nextProfileId(version)
+            val legacyIds = listOf(niceName, "kdp-samsung-v$version").filter { it != profileId }
             if (alreadyUpdatedNext(context, profileId, patched)) {
+                legacyIds.forEach { KsudNextProfiles.deleteDynamic(context, it) }
                 KsudNextProfiles.setSelected(context, profileId)
                 progress(100, "you are already updated")
                 say("you are already updated")
@@ -323,11 +325,16 @@ object DfKsudUpdater {
             }
             KsudNextProfiles.addDynamic(context, profileId, patched,
                 "official ksud $tag + Samsung KDP+DEFEX modules v$NEXT_MODULE_VERSION (UAPI 5)")
+            legacyIds.forEach { KsudNextProfiles.deleteDynamic(context, it) }
             say("[+] Profile '$profileId' created and SELECTED")
             progress(100, "Done")
             "OK: $tag patched -> profile '$profileId'"
         }
     }
+
+    /** Profile ID used for downloaded KernelSU Next builds (e.g. 3.4.2-kdp-samsung -> "3.4.2 · kdp-samsung"). */
+    internal fun nextProfileId(version: String): String =
+        "${version.removePrefix("v")}-kdp-samsung"
 
     private fun alreadyUpdatedNext(context: Context, profileId: String, patched: ByteArray): Boolean =
         profileMatches(File(KsudNextProfiles.dynamicDir(context), profileId), patched)

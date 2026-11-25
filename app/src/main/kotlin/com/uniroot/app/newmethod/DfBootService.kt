@@ -90,9 +90,15 @@ class DfBootService : Service() {
             }
 
             // 2. Settle, then up to 6 attempts 30 s apart.
+            if (com.uniroot.app.engine.BootRootState.isRootedThisBoot(applicationContext)) {
+                bootLog("already rooted this kernel boot (soft reboot) — skipping")
+                return
+            }
             Thread.sleep(8_000)
             for (attempt in 1..6) {
-                if (java.io.File("/dev/df").exists()) {
+                if (com.uniroot.app.engine.BootRootState.isRootedThisBoot(applicationContext) ||
+                    java.io.File("/dev/df").exists()
+                ) {
                     bootLog("already hooked — root is up")
                     return
                 }
@@ -101,7 +107,13 @@ class DfBootService : Service() {
                     bootLog(msg.trim())
                 }, { _, _ -> })
                 bootLog("=== attempt $attempt rc=$rc ===")
-                if (rc == 0) return
+                if (rc == 0) {
+                    com.uniroot.app.engine.BootRootState.markRooted(
+                        applicationContext,
+                        if (next) "kernelsu_next" else "kernelsu",
+                    )
+                    return
+                }
                 if (attempt < 6) {
                     Thread.sleep(30_000)
                     if (java.io.File("/dev/df").exists()) {
